@@ -1,5 +1,8 @@
 ### CUSTOM ###
 application-local.yml
+/chat-memory/
+/tmp/
+/.codex/
 
 HELP.md
 target/
