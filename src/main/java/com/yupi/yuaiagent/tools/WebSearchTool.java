@@ -1,50 +1,94 @@
 package com.yupi.yuaiagent.tools;
 
-import cn.hutool.http.HttpUtil;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 
 public class WebSearchTool {
 
-    // SearchAPI 的搜索接口地址
-    private static final String SEARCH_API_URL = "https://www.searchapi.io/api/v1/search";
+    private static final URI SEARCH_API_URI = URI.create("https://www.searchapi.io/api/v1/search");
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
 
     private final String apiKey;
+    private final HttpClient httpClient;
+    private final URI searchApiUri;
+    private final Duration requestTimeout;
 
     public WebSearchTool(String apiKey) {
-        this.apiKey = apiKey;
+        this(apiKey, HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build(),
+                SEARCH_API_URI, REQUEST_TIMEOUT);
     }
 
-    @Tool(description = "Search for information from Baidu Search Engine")
-    public String searchWeb(
-            @ToolParam(description = "Search query keyword") String query) {
-        Map<String, Object> paramMap = new HashMap<>();
-        paramMap.put("q", query);
-        paramMap.put("api_key", apiKey);
-        paramMap.put("engine", "baidu");
-        try {
-            String response = HttpUtil.get(SEARCH_API_URL, paramMap);
-            // 取出返回结果的前 5 条
-            JSONObject jsonObject = JSONUtil.parseObj(response);
-            // 提取 organic_results 部分
-            JSONArray organicResults = jsonObject.getJSONArray("organic_results");
-            List<Object> objects = organicResults.subList(0, 5);
-            // 拼接搜索结果为字符串
-            String result = objects.stream().map(obj -> {
-                JSONObject tmpJSONObject = (JSONObject) obj;
-                return tmpJSONObject.toString();
-            }).collect(Collectors.joining(","));
-            return result;
-        } catch (Exception e) {
-            return "Error searching Baidu: " + e.getMessage();
+    WebSearchTool(String apiKey, HttpClient httpClient, URI searchApiUri, Duration requestTimeout) {
+        this.apiKey = apiKey;
+        this.httpClient = httpClient;
+        this.searchApiUri = searchApiUri;
+        this.requestTimeout = requestTimeout;
+    }
+
+    @Tool(description = "Search Baidu and return at most five concise web results")
+    public String searchWeb(@ToolParam(description = "Search query keyword") String query) {
+        if (query == null || query.isBlank()) {
+            return "Error searching Baidu: query must not be blank";
         }
+        if (apiKey == null || apiKey.isBlank()) {
+            return "Error searching Baidu: API key is not configured";
+        }
+        try {
+            String separator = searchApiUri.toString().contains("?") ? "&" : "?";
+            URI requestUri = URI.create(searchApiUri + separator
+                    + "engine=baidu&q=" + encode(query) + "&api_key=" + encode(apiKey));
+            HttpRequest request = HttpRequest.newBuilder(requestUri)
+                    .timeout(requestTimeout)
+                    .header("Accept", "application/json")
+                    .GET()
+                    .build();
+            HttpResponse<String> response = httpClient.send(
+                    request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                return "Error searching Baidu: HTTP status " + response.statusCode();
+            }
+            return selectResults(response.body());
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return "Error searching Baidu: request interrupted";
+        }
+        catch (Exception e) {
+            return "Error searching Baidu: request failed";
+        }
+    }
+
+    private String selectResults(String responseBody) {
+        JSONObject response = JSONUtil.parseObj(responseBody);
+        JSONArray organicResults = response.getJSONArray("organic_results");
+        JSONArray selected = new JSONArray();
+        if (organicResults == null) {
+            return selected.toString();
+        }
+        int limit = Math.min(5, organicResults.size());
+        for (int index = 0; index < limit; index++) {
+            JSONObject source = organicResults.getJSONObject(index);
+            JSONObject item = new JSONObject();
+            item.set("title", source.getStr("title", ""));
+            item.set("link", source.getStr("link", ""));
+            item.set("snippet", source.getStr("snippet", ""));
+            selected.add(item);
+        }
+        return selected.toString();
+    }
+
+    private String encode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 }

@@ -1,67 +1,94 @@
 package com.yupi.yuaiagent.app;
 
-import jakarta.annotation.Resource;
-import org.junit.jupiter.api.Assertions;
+import com.yupi.yuaiagent.tools.ToolRegistration;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
+import org.mockito.ArgumentCaptor;
+import org.springframework.ai.chat.client.ChatClientRequest;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
+import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
+import org.springframework.ai.chat.memory.MessageWindowChatMemory;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.rag.advisor.RetrievalAugmentationAdvisor;
 
-import java.util.UUID;
+import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
-@SpringBootTest
 class LoveAppTest {
 
-    @Resource
+    private ChatModel chatModel;
+    private RetrievalAugmentationAdvisor ragAdvisor;
     private LoveApp loveApp;
 
-    @Test
-    void testChat() {
-        String chatId = UUID.randomUUID().toString();
-        // 第一轮
-        String message = "你好，我是程序员鱼皮";
-        String answer = loveApp.doChat(message, chatId);
-        Assertions.assertNotNull(answer);
-        // 第二轮
-        message = "我想让另一半（编程导航）更爱我";
-        answer = loveApp.doChat(message, chatId);
-        Assertions.assertNotNull(answer);
-//        // 第三轮
-//        message = "我的另一半叫什么来着？刚跟你说过，帮我回忆一下";
-//        answer = loveApp.doChat(message, chatId);
-//        Assertions.assertNotNull(answer);
-    }
-    @Test
-    void doChatWithReport() {
-        String chatId = UUID.randomUUID().toString();
-        // 第一轮
-        String message = "你好，我是程序员鱼皮，我想让另一半（编程导航）更爱我，但我不知道该怎么做";
-        LoveApp.LoveReport loveReport = loveApp.doChatWithReport(message, chatId);
-        Assertions.assertNotNull(loveReport);
-    }
+    @BeforeEach
+    void setUp() {
+        chatModel = mock(ChatModel.class);
+        when(chatModel.call(any(Prompt.class))).thenAnswer(invocation -> {
+            Prompt prompt = invocation.getArgument(0);
+            boolean reportRequested = prompt.getSystemMessage().getText().contains("恋爱建议报告");
+            String text = reportRequested
+                    ? "{\"title\":\"沟通建议\",\"suggestions\":[\"先倾听对方\"]}"
+                    : "mock answer";
+            return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
+        });
 
-    @Test
-    void doChatWithRag() {
-        String chatId = UUID.randomUUID().toString();
-        String message = "我现在是单身状态，对于恋爱十分焦虑，该怎么办？";
-        String answer =  loveApp.doChatWithRag(message, chatId);
-        Assertions.assertNotNull(answer);
+        ragAdvisor = mock(RetrievalAugmentationAdvisor.class);
+        when(ragAdvisor.getName()).thenReturn("MockRagAdvisor");
+        when(ragAdvisor.adviseCall(any(ChatClientRequest.class), any(CallAdvisorChain.class)))
+                .thenAnswer(invocation -> invocation.<CallAdvisorChain>getArgument(1)
+                        .nextCall(invocation.getArgument(0)));
+
+        ChatMemory memory = MessageWindowChatMemory.builder()
+                .chatMemoryRepository(new InMemoryChatMemoryRepository())
+                .maxMessages(10)
+                .build();
+        loveApp = new LoveApp(chatModel, memory, ragAdvisor, new ToolRegistration("").allTools());
     }
 
     @Test
-    void doChatWithTools() {
-        // 测试联网搜索问题的答案
-        testMessage("周末想带女朋友去上海约会，推荐几个适合情侣的小众打卡地？");
+    void normalChatUsesConversationMemory() {
+        assertEquals("mock answer", loveApp.doChat("我最近有些焦虑", "chat-1"));
+        assertEquals("mock answer", loveApp.doChat("我刚才说了什么？", "chat-1"));
 
-//        // 测试文件操作：保存用户档案
-//        testMessage("保存我的恋爱档案为文件");
+        ArgumentCaptor<Prompt> promptCaptor = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel, atLeastOnce()).call(promptCaptor.capture());
+        Prompt secondPrompt = promptCaptor.getAllValues().getLast();
+        assertTrue(secondPrompt.getInstructions().stream()
+                .anyMatch(message -> "我最近有些焦虑".equals(message.getText())));
     }
 
-    private void testMessage(String message) {
-        String chatId = UUID.randomUUID().toString();
-        String answer = loveApp.doChatWithTools(message, chatId);
-        Assertions.assertNotNull(answer);
+    @Test
+    void createsStructuredReport() {
+        LoveApp.LoveReport report = loveApp.doChatWithReport("我们总因沟通争吵", "report-1");
+
+        assertNotNull(report);
+        assertEquals("沟通建议", report.title());
+        assertEquals(List.of("先倾听对方"), report.suggestions());
     }
 
+    @Test
+    void appliesRagAdvisor() {
+        assertEquals("mock answer", loveApp.doChatWithRag("单身时如何扩大社交圈？", "rag-1"));
 
+        verify(ragAdvisor).adviseCall(any(ChatClientRequest.class), any(CallAdvisorChain.class));
+    }
+
+    @Test
+    void registersToolCallbacksForToolChat() {
+        assertEquals("mock answer", loveApp.doChatWithTools("请搜索上海约会地点", "tool-1"));
+        verify(chatModel).call(any(Prompt.class));
+    }
 }

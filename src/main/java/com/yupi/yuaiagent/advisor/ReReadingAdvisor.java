@@ -1,48 +1,34 @@
 package com.yupi.yuaiagent.advisor;
 
-import org.springframework.ai.chat.client.advisor.api.*;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
+import org.springframework.ai.chat.client.ChatClientRequest;
+import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
+import org.springframework.ai.chat.prompt.Prompt;
 import reactor.core.publisher.Flux;
 
-import java.util.HashMap;
-import java.util.Map;
-
 /**
- * 自定义 Re2 Advisor
- * 可提高大型语言模型的推理能力
- * 这里的模板实际上并不会自动替换，在新版本的spring-ai中，会自动替换模板中的变量，这里如果想实现得手动使用PromptTemplate构建
+ * Re2 (re-reading) advisor: repeats the original question before model invocation.
  */
-public class ReReadingAdvisor implements CallAroundAdvisor, StreamAroundAdvisor {
+public class ReReadingAdvisor implements CallAdvisor, StreamAdvisor {
 
-
-    private AdvisedRequest before(AdvisedRequest advisedRequest) {
-
-        Map<String, Object> advisedUserParams = new HashMap<>(advisedRequest.userParams());
-        advisedUserParams.put("re2_input_query", advisedRequest.userText());
-
-        // 更新上下文
-        advisedRequest = advisedRequest.updateContext(context -> {
-            context.put("key", "value");
-            return context;
-        });
-
-
-        return AdvisedRequest.from(advisedRequest)
-                .userText("""
-                        {re2_input_query}
-                        Read the question again: {re2_input_query}
-                        """)
-                .userParams(advisedUserParams)
-                .build();
+    @Override
+    public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
+        return chain.nextCall(before(request));
     }
 
     @Override
-    public AdvisedResponse aroundCall(AdvisedRequest advisedRequest, CallAroundAdvisorChain chain) {
-        return chain.nextAroundCall(this.before(advisedRequest));
+    public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
+        return chain.nextStream(before(request));
     }
 
-    @Override
-    public Flux<AdvisedResponse> aroundStream(AdvisedRequest advisedRequest, StreamAroundAdvisorChain chain) {
-        return chain.nextAroundStream(this.before(advisedRequest));
+    private ChatClientRequest before(ChatClientRequest request) {
+        String originalQuestion = request.prompt().getUserMessage().getText();
+        Prompt prompt = request.prompt().augmentUserMessage(
+                originalQuestion + "\n\nRead the question again: " + originalQuestion);
+        return request.mutate().prompt(prompt).build();
     }
 
     @Override
@@ -52,6 +38,6 @@ public class ReReadingAdvisor implements CallAroundAdvisor, StreamAroundAdvisor 
 
     @Override
     public String getName() {
-        return this.getClass().getSimpleName();
+        return getClass().getSimpleName();
     }
 }

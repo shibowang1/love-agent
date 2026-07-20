@@ -1,0 +1,30 @@
+spring:
+  ai:
+    dashscope:
+      api-key: ${AI_DASHSCOPE_API_KEY}
+      chat:
+        options:
+          model: qwen-plus
+      embedding:
+        options:
+          model: text-embedding-v4
+          dimensions: 1536
+    vectorstore:
+      pgvector:
+        initialize-schema: true
+        dimensions: 1536
+  datasource:
+    url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/yu_ai_agent}
+    username: ${POSTGRES_USERNAME:postgres}
+    password: ${POSTGRES_PASSWORD:postgres}
+
+search-api:
+  api-key: ${SEARCH_API_KEY:}
+
+love-app:
+  rag:
+    pgvector:
+      # Exact search works on Alibaba Cloud ARM instances and is sufficient for this small knowledge base.
+      # Change to HNSW when the database supports the vector_cosine_ops HNSW operator class.
+      table-name: love_app_vector_store
+      index-type: NONE

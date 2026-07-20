@@ -3,6 +3,7 @@ package com.yupi.yuaiagent.app;
 import jakarta.annotation.Resource;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -12,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 @SpringBootTest
+@EnabledIfEnvironmentVariable(named = "RUN_LIVE_AI_TESTS", matches = "true")
 public class PgVectorVectorStoreConfigTest {
 
     @Resource

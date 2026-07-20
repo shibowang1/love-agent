@@ -1,25 +1,17 @@
 package com.yupi.yuaiagent.demo.invoke;
 
-import jakarta.annotation.Resource;
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.boot.CommandLineRunner;
-import org.springframework.stereotype.Component;
 
-// 取消注释即可在 SpringBoot 项目启动时执行
-//因为其被注册为了一个bean 实现了 CommandLineRunner接口，会自动执行run方法
-@Component
-public class SpringAiAiInvoke implements CommandLineRunner {
+/**
+ * Minimal Spring AI invocation example. It is intentionally not a Spring bean,
+ * so application startup never triggers an unexpected model call.
+ */
+public final class SpringAiAiInvoke {
 
-    @Resource
-    private ChatModel dashscopeChatModel;
+    private SpringAiAiInvoke() {
+    }
 
-    @Override
-    public void run(String... args) throws Exception {
-        AssistantMessage output = dashscopeChatModel.call(new Prompt("你好，我是鱼皮"))
-                .getResult()
-                .getOutput();
-        System.out.println(output.getText());
+    public static String call(ChatModel chatModel, String message) {
+        return chatModel.call(message);
     }
 }
