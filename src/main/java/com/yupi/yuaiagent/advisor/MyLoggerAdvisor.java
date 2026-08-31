@@ -1,20 +1,49 @@
 package com.yupi.yuaiagent.advisor;
 
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.advisor.api.*;
-import org.springframework.ai.chat.model.MessageAggregator;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
+import org.springframework.ai.chat.client.ChatClientMessageAggregator;
+import org.springframework.ai.chat.client.ChatClientRequest;
+import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
 import reactor.core.publisher.Flux;
 
 /**
- * 自定义日志 Advisor
- * 打印 info 级别日志、只输出单次用户提示词和 AI 回复的文本
+ * Logs request and response metadata without exposing conversation content.
  */
 @Slf4j
-public class MyLoggerAdvisor implements CallAroundAdvisor, StreamAroundAdvisor {
+public class MyLoggerAdvisor implements CallAdvisor, StreamAdvisor {
 
     @Override
-    public String getName() {
-        return this.getClass().getSimpleName();
+    public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
+        logRequest(request);
+        ChatClientResponse response = chain.nextCall(request);
+        logResponse(response);
+        return response;
+    }
+
+    @Override
+    public Flux<ChatClientResponse> adviseStream(ChatClientRequest request, StreamAdvisorChain chain) {
+        logRequest(request);
+        return new ChatClientMessageAggregator()
+                .aggregateChatClientResponse(chain.nextStream(request), this::logResponse);
+    }
+
+    private void logRequest(ChatClientRequest request) {
+        int messageCount = request.prompt().getInstructions().size();
+        int userTextLength = request.prompt().getUserMessage().getText().length();
+        log.debug("AI request: messages={}, userTextLength={}", messageCount, userTextLength);
+    }
+
+    private void logResponse(ChatClientResponse response) {
+        String text = response.chatResponse() == null
+                || response.chatResponse().getResult() == null
+                || response.chatResponse().getResult().getOutput() == null
+                ? null
+                : response.chatResponse().getResult().getOutput().getText();
+        log.debug("AI response: textLength={}", text == null ? 0 : text.length());
     }
 
     @Override
@@ -22,31 +51,8 @@ public class MyLoggerAdvisor implements CallAroundAdvisor, StreamAroundAdvisor {
         return 100;
     }
 
-    private AdvisedRequest before(AdvisedRequest request) {
-        log.info("AI Request: {}", request.userText());
-        log.info("AI Request - userText: {}", request.userText());
-        log.info("AI Request - systemText: {}", request.systemText());
-        return request;
-    }
-
-    private void observeAfter(AdvisedResponse advisedResponse) {
-        log.info("AI Response: {}", advisedResponse.response().getResult().getOutput().getText());
-    }
-
-    public AdvisedResponse aroundCall(AdvisedRequest advisedRequest, CallAroundAdvisorChain chain) {
-        advisedRequest = this.before(advisedRequest);
-        AdvisedResponse advisedResponse = chain.nextAroundCall(advisedRequest);
-
-//        // 读取上下文
-//        Object value = advisedResponse.adviseContext().get("key");
-
-        this.observeAfter(advisedResponse);
-        return advisedResponse;
-    }
-
-    public Flux<AdvisedResponse> aroundStream(AdvisedRequest advisedRequest, StreamAroundAdvisorChain chain) {
-        advisedRequest = this.before(advisedRequest);
-        Flux<AdvisedResponse> advisedResponses = chain.nextAroundStream(advisedRequest);
-        return (new MessageAggregator()).aggregateAdvisedResponse(advisedResponses, this::observeAfter);
+    @Override
+    public String getName() {
+        return getClass().getSimpleName();
     }
 }
